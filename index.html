@@ -1,0 +1,579 @@
+<!DOCTYPE html>
+<html lang="zh-HK">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>香港天氣與巴士交通地圖</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
+    <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+    <style>
+        .map-container { height: 80vh; }
+        .map-label { background: rgba(255, 255, 255, 0.95); border: 1px solid #ccc; border-radius: 4px; padding: 2px 5px; font-size: 11px; white-space: nowrap; box-shadow: 0 1px 3px rgba(0,0,0,0.2); line-height: 1.4; }
+        .bus-popup { font-size: 13px; min-width: 240px; max-height: 300px; overflow-y: auto; }
+        .bus-item { border-bottom: 1px solid #eee; padding: 4px 0; }
+        .bus-route { font-weight: bold; color: #dc2626; }
+        .bus-eta { color: #2563eb; font-weight: bold; }
+        .highlight-box { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 8px; margin-bottom: 5px; }
+        @media (max-width: 768px) {
+            .map-container { height: 60vh; }
+            .bus-popup { min-width: 200px; max-height: 250px; }
+            #busStopPanel { width: 100% !important; right: 0 !important; }
+        }
+        .search-box { z-index: 1000; }
+        #busStopPanel { z-index: 1100; }
+        .stop-info-card {
+            background: #f0f9ff; border-left: 3px solid #0ea5e9;
+            padding: 6px 8px; margin-bottom: 6px; border-radius: 4px;
+        }
+        .eta-row {
+            display: flex; justify-content: space-between; 
+            padding: 2px 8px; font-size: 11px;
+            border-bottom: 1px dashed #e5e7eb;
+        }
+        .eta-row:hover { background: #f0f9ff; }
+    </style>
+</head>
+<body class="bg-gray-100 text-gray-800">
+    <div class="container mx-auto p-4" x-data="appApp()">
+        <h1 class="text-2xl font-bold mb-2 text-center text-indigo-600">香港實時地圖整合系統</h1>
+        
+        <div class="flex justify-center gap-4 mb-4">
+            <button @click="switchView('weather')" class="px-6 py-2 rounded-lg font-bold transition" :class="currentView === 'weather' ? 'bg-indigo-600 text-white' : 'bg-white border'">實時天氣</button>
+            <button @click="switchView('bus')" class="px-6 py-2 rounded-lg font-bold transition" :class="currentView === 'bus' ? 'bg-indigo-600 text-white' : 'bg-white border'">巴士交通</button>
+            <button @click="refreshCurrentView()" class="px-4 py-2 rounded-lg font-bold transition bg-green-500 text-white hover:bg-green-600" title="手動刷新當前視圖">🔄 刷新</button>
+        </div>
+
+        <div x-show="currentView === 'weather'" class="flex flex-col md:flex-row gap-4" style="display: none;">
+            <div class="w-full md:w-3/4 bg-white p-2 rounded-xl shadow-lg">
+                <div id="weatherMap" class="map-container rounded-lg"></div>
+            </div>
+            <div class="w-full md:w-1/4 bg-white p-4 rounded-xl shadow-lg flex flex-col" style="height: 80vh;">
+                <h2 class="text-lg font-semibold text-indigo-700 mb-2 border-b pb-2"><span x-text="currentDistrict.name"></span> - 天氣重點</h2>
+                <div class="text-sm space-y-2 mb-3">
+                    <div class="highlight-box">
+                        <div class="font-bold text-gray-700">現時天氣:</div>
+                        <div>體感: <span class="font-bold" :class="currentDistrict.app_temp >= 28 ? 'text-red-500' : 'text-gray-800'" x-text="currentDistrict.app_temp + '°C'"></span> | 氣溫: <span x-text="currentDistrict.temp + '°C'"></span></div>
+                        <div>降雨概率: <span class="font-bold" :class="currentDistrict.rain >= 70 ? 'text-red-500' : 'text-blue-500'" x-text="currentDistrict.rain + '%'"></span></div>
+                    </div>
+                    <div class="highlight-box">
+                        <div class="font-bold text-gray-700">最大溫差時段：</div>
+                        <div><span x-text="currentDistrict.max_diff_time"></span></div>
+                        <div>體感將至: <span class="font-bold" :class="currentDistrict.max_diff_temp >= 28 ? 'text-red-500' : 'text-gray-800'" x-text="currentDistrict.max_diff_temp + '°C'"></span></div>
+                    </div>
+                    <div class="highlight-box">
+                        <div class="font-bold text-gray-700">最可能下雨時段：</div>
+                        <div><span x-text="currentDistrict.max_rain_time"></span></div>
+                        <div>降雨概率: <span class="font-bold" :class="currentDistrict.max_rain_val >= 70 ? 'text-red-500' : 'text-blue-500'" x-text="currentDistrict.max_rain_val + '%'"></span></div>
+                    </div>
+                </div>
+                <h3 class="text-md font-semibold text-gray-600 border-t pt-2 mb-1">逐時預測：</h3>
+                <div class="overflow-y-auto flex-1">
+                    <template x-for="(h, idx) in currentDistrict.hourly" :key="idx">
+                        <div class="flex justify-between items-center border-b py-1 text-xs" :class="idx === 0 ? 'bg-indigo-100 font-bold border-l-4 border-indigo-500' : ''">
+                            <span class="text-gray-500 w-2/5" x-text="h.time"></span>
+                            <div class="flex justify-between w-3/5">
+                                <span :class="h.temp >= 28 ? 'text-red-500' : 'text-gray-800'" x-text="h.temp + '°C'"></span>
+                                <span :class="h.rain >= 70 ? 'text-red-500 font-bold' : 'text-blue-500'" x-text="h.rain + '%'"></span>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+                <div class="grid grid-cols-2 gap-2 mt-2 overflow-y-auto" style="max-height: 100px;">
+                    <template x-for="(d, idx) in districts" :key="d.name">
+                        <button @click="focusDistrict(idx)" class="text-xs p-1 border rounded" :class="currentIdx === idx ? 'bg-indigo-100 border-indigo-500' : ''" x-text="d.name"></button>
+                    </template>
+                </div>
+            </div>
+        </div>
+
+        <div x-show="currentView === 'bus'" class="bg-white p-2 rounded-xl shadow-lg relative" style="display: none;">
+            <div id="busMap" class="map-container rounded-lg"></div>
+            
+            <div class="absolute top-3 left-3 bg-white/95 p-2 rounded shadow search-box" style="min-width: 240px;">
+                <input type="text" x-model="busSearchKeyword" @input="searchBusStop()" placeholder="🔍 搜索巴士站名稱..." class="w-full px-2 py-1 border rounded text-sm focus:outline-none focus:border-indigo-500">
+                <div x-show="searchResults.length > 0" class="mt-1 max-h-40 overflow-y-auto text-xs">
+                    <template x-for="(stop, idx) in searchResults.slice(0, 12)" :key="idx">
+                        <div @click="selectBusStop(stop)" class="p-1 hover:bg-indigo-100 cursor-pointer border-b" x-text="stop.name_tc"></div>
+                    </template>
+                </div>
+            </div>
+
+            <div class="absolute top-3 left-1/2 -translate-x-1/2 bg-white/95 p-2 px-4 rounded shadow search-box flex items-center gap-2">
+                <label class="text-sm font-bold flex items-center gap-2 cursor-pointer text-gray-700">
+                    <input type="checkbox" x-model="showTraffic" @change="toggleTraffic()" class="w-4 h-4 text-indigo-600"> 
+                    <span>顯示 Google 實時交通狀況</span>
+                </label>
+            </div>
+            
+            <div class="absolute top-3 right-3 bg-white/90 px-3 py-2 rounded shadow text-sm font-bold text-indigo-600" x-show="busLoading" x-transition>
+                正在載入巴士站資料，請稍候...
+            </div>
+            
+            <div class="absolute bottom-5 left-3 bg-white/90 p-2 rounded shadow text-xs">
+                <div class="font-bold mb-1 border-b pb-1">真實交通狀況 (Google)</div>
+                <div class="flex items-center mb-1"><span style="display:inline-block;width:20px;height:4px;background:#e11d48;margin-right:5px;border-radius:2px;"></span>紅色: 擁堵</div>
+                <div class="flex items-center mb-1"><span style="display:inline-block;width:20px;height:4px;background:#f59e0b;margin-right:5px;border-radius:2px;"></span>橙色: 緩慢</div>
+                <div class="flex items-center mb-1"><span style="display:inline-block;width:20px;height:4px;background:#22c55e;margin-right:5px;border-radius:2px;"></span>綠色: 暢通</div>
+                <div class="flex items-center mt-1 pt-1 border-t"><span style="display:inline-block;width:14px;height:14px;background:#dc2626;border-radius:50%;margin-right:5px;border:2px solid white;"></span>巴士站</div>
+            </div>
+
+            <div id="busStopPanel" x-show="selectedStop" x-transition class="absolute top-0 right-0 h-full bg-white shadow-2xl flex flex-col" style="width: 380px; display: none;">
+                <div class="bg-indigo-600 text-white p-3 flex justify-between items-center">
+                    <div>
+                        <div class="text-xs opacity-80">已選擇巴士站</div>
+                        <div class="font-bold text-lg" x-text="selectedStop?.name_tc || ''"></div>
+                    </div>
+                    <button @click="closeStopPanel()" class="text-white hover:bg-indigo-700 rounded w-8 h-8 flex items-center justify-center text-xl">×</button>
+                </div>
+                
+                <div class="p-3 border-b bg-gray-50 flex gap-2">
+                    <button @click="loadStopEta(selectedStop)" class="flex-1 bg-indigo-600 text-white px-3 py-2 rounded text-sm font-bold hover:bg-indigo-700">
+                        🔄 刷新到站時間
+                    </button>
+                    <button @click="focusSelectedStop()" class="bg-blue-500 text-white px-3 py-2 rounded text-sm font-bold hover:bg-blue-600" title="地圖聚焦此站">
+                        📍 定位
+                    </button>
+                </div>
+                
+                <div class="flex-1 overflow-y-auto p-3">
+                    <div x-show="stopEtaLoading" class="text-center py-8 text-gray-500">
+                        <div class="animate-spin inline-block w-8 h-8 border-4 border-indigo-200 border-t-indigo-600 rounded-full mb-2"></div>
+                        <div>正在載入所有路線到站時間...</div>
+                    </div>
+                    
+                    <div x-show="stopEtaError" class="bg-red-50 border border-red-200 text-red-700 p-3 rounded text-sm">
+                        <div class="font-bold mb-1">❌ 載入失敗</div>
+                        <div x-text="stopEtaError"></div>
+                        <div class="mt-2 text-xs text-gray-600">提示：請將網頁上傳至 GitHub 後再試，本地預覽可能受 CORS 限制。</div>
+                    </div>
+                    
+                    <div x-show="!stopEtaLoading && !stopEtaError && stopEtaRoutes.length === 0" class="text-center py-8 text-gray-500">
+                        <div class="text-4xl mb-2">🚌</div>
+                        <div>暫無班次資料</div>
+                    </div>
+                    
+                    <div x-show="!stopEtaLoading && !stopEtaError && stopEtaRoutes.length > 0">
+                        <div class="text-xs text-gray-500 mb-2">共 <span class="font-bold text-indigo-600" x-text="stopEtaRoutes.length"></span> 條路線，所有班次如下：</div>
+                        <template x-for="(route, idx) in stopEtaRoutes" :key="idx">
+                            <div class="stop-info-card">
+                                <div class="flex justify-between items-start mb-1">
+                                    <div>
+                                        <span class="bus-route text-base" x-text="route.route"></span>
+                                        <span class="text-xs text-gray-500 ml-1" x-text="route.dir === 'O' ? '往' : (route.dir === 'I' ? '回程' : '')"></span>
+                                    </div>
+                                    <span class="text-xs bg-gray-200 px-2 py-0.5 rounded" x-text="route.etas.length + ' 班'"></span>
+                                </div>
+                                <div class="text-xs text-gray-700 mb-1">往 <span class="font-semibold" x-text="route.dest"></span></div>
+                                <div class="bg-white rounded border border-gray-100">
+                                    <template x-for="(eta, eidx) in route.etas" :key="eidx">
+                                        <div class="eta-row">
+                                            <span>
+                                                <span class="bus-eta" x-text="eta.minutes + ' 分'"></span>
+                                                <span class="text-gray-400 ml-1" x-text="eta.timeStr"></span>
+                                            </span>
+                                            <span class="text-gray-500" x-text="eta.remark || ''"></span>
+                                        </div>
+                                    </template>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+                
+                <div class="p-2 border-t bg-gray-50 text-xs text-gray-500 text-center">
+                    最後更新: <span x-text="stopEtaUpdateTime"></span>
+                </div>
+            </div>
+        </div>
+        
+        <div class="text-center mt-2 text-gray-500 text-xs">最後更新: <span x-text="updateTime"></span> | 點擊地圖上的巴士站圖標查看完整實時到站時間</div>
+    </div>
+
+    <script>
+        const districtsData = [
+            {"name": "中環", "lat": 22.281, "lon": 114.158}, {"name": "灣仔", "lat": 22.276, "lon": 114.175},
+            {"name": "銅鑼灣", "lat": 22.281, "lon": 114.192}, {"name": "北角", "lat": 22.293, "lon": 114.195},
+            {"name": "太古城", "lat": 22.284, "lon": 114.214}, {"name": "尖沙咀", "lat": 22.296, "lon": 114.172},
+            {"name": "旺角", "lat": 22.319, "lon": 114.169}, {"name": "深水埗", "lat": 22.331, "lon": 114.158},
+            {"name": "觀塘", "lat": 22.312, "lon": 114.225}, {"name": "黃大仙", "lat": 22.335, "lon": 114.19},
+            {"name": "荃灣", "lat": 22.37, "lon": 114.11}, {"name": "屯門", "lat": 22.39, "lon": 113.97},
+            {"name": "元朗", "lat": 22.44, "lon": 114.02}, {"name": "大埔", "lat": 22.44, "lon": 114.17},
+            {"name": "沙田", "lat": 22.38, "lon": 114.19}, {"name": "機場", "lat": 22.30, "lon": 113.91}
+        ];
+
+        const realBusStops = [];
+
+        const mockStops = [
+            {stop: "TEST001", name_tc: "中環(天星碼頭)", lat: 22.2835, long: 114.1519},
+            {stop: "TEST002", name_tc: "灣仔碼頭", lat: 22.2783, long: 114.1712},
+            {stop: "TEST003", name_tc: "銅鑼灣(軒尼詩道)", lat: 22.2795, long: 114.1905},
+            {stop: "TEST004", name_tc: "北角(英皇道)", lat: 22.2925, long: 114.2005},
+            {stop: "TEST005", name_tc: "太古城中心", lat: 22.2841, long: 114.2137},
+            {stop: "TEST006", name_tc: "尖沙咀碼頭", lat: 22.2935, long: 114.1680},
+            {stop: "TEST007", name_tc: "旺角(彌敦道)", lat: 22.3196, long: 114.1694},
+            {stop: "TEST008", name_tc: "觀塘(觀塘道)", lat: 22.3128, long: 114.2245}
+        ];
+
+        const CORS_PROXIES = [
+            url => `https://corsproxy.io/?` + encodeURIComponent(url),
+            url => `https://api.allorigins.win/raw?url=` + encodeURIComponent(url),
+            url => `https://cors-anywhere.herokuapp.com/` + url
+        ];
+
+        async function fetchWithFallback(apiUrl) {
+            try {
+                const res = await fetch(apiUrl);
+                if (res.ok) return res;
+            } catch (e) { /* 繼續嘗試代理 */ }
+            
+            for (const proxyFn of CORS_PROXIES) {
+                try {
+                    const res = await fetch(proxyFn(apiUrl));
+                    if (res.ok) return res;
+                } catch (e) { /* 繼續下一個 */ }
+            }
+            throw new Error('All fetch attempts failed');
+        }
+
+        function appApp() {
+            return {
+                currentView: 'weather',
+                updateTime: '載入中...',
+                currentIdx: 0,
+                districts: districtsData.map(d => ({...d, temp: '--', app_temp: '--', rain: '--', max_diff_time: '--', max_diff_temp: '--', max_rain_time: '--', max_rain_val: '--', hourly: []})),
+                weatherMapInit: false,
+                busMapInit: false,
+                busLoading: false,
+                busSearchKeyword: '',
+                searchResults: [],
+                allBusStops: [],
+                busMarkersMap: {},
+                
+                selectedStop: null,
+                stopEtaLoading: false,
+                stopEtaError: null,
+                stopEtaRoutes: [],
+                stopEtaUpdateTime: '--',
+                
+                showTraffic: true,
+                baseLayer: null,
+                trafficLayer: null,
+                
+                init() {
+                    this.fetchWeather();
+                    setInterval(() => this.fetchWeather(), 300000);
+                    this.$nextTick(() => { this.initWeatherMap(); });
+                },
+                
+                get currentDistrict() { return this.districts[this.currentIdx]; },
+
+                refreshCurrentView() {
+                    if (this.currentView === 'weather') {
+                        this.fetchWeather();
+                    } else if (this.currentView === 'bus' && this.busMapInit) {
+                        if (this.selectedStop) this.loadStopEta(this.selectedStop);
+                    }
+                },
+
+                switchView(view) {
+                    this.currentView = view;
+                    this.$nextTick(() => {
+                        if (view === 'weather' && this.weatherMapInit) {
+                            this.weatherMap.invalidateSize();
+                        } else if (view === 'bus') {
+                            if (!this.busMapInit) {
+                                this.initBusMap();
+                            } else {
+                                this.busMap.invalidateSize();
+                            }
+                        }
+                    });
+                },
+
+                focusDistrict(idx) {
+                    this.currentIdx = idx;
+                    let d = this.currentDistrict;
+                    if (this.weatherMap && d.lat) {
+                        this.weatherMap.flyTo([d.lat, d.lon], 14, { duration: 0.5 });
+                        if (this.weatherMarkers[d.name]) this.weatherMarkers[d.name].openPopup();
+                    }
+                },
+
+                searchBusStop() {
+                    if (!this.busSearchKeyword.trim() || this.allBusStops.length === 0) {
+                        this.searchResults = [];
+                        return;
+                    }
+                    const kw = this.busSearchKeyword.trim();
+                    this.searchResults = this.allBusStops.filter(s => 
+                        s.name_tc && s.name_tc.includes(kw)
+                    ).slice(0, 30);
+                },
+
+                flyToStop(stop) {
+                    if (this.busMap && stop) {
+                        const lat = parseFloat(stop.lat);
+                        const lon = parseFloat(stop.long);
+                        if (!isNaN(lat) && !isNaN(lon)) {
+                            this.busMap.flyTo([lat, lon], 17, { duration: 0.8 });
+                        }
+                    }
+                },
+
+                selectBusStop(stop) {
+                    this.selectedStop = stop;
+                    this.flyToStop(stop);
+                    this.searchResults = [];
+                    this.busSearchKeyword = '';
+                    this.loadStopEta(stop);
+                },
+
+                focusSelectedStop() {
+                    if (this.selectedStop) this.flyToStop(this.selectedStop);
+                },
+
+                closeStopPanel() {
+                    this.selectedStop = null;
+                    this.stopEtaRoutes = [];
+                    this.stopEtaError = null;
+                },
+
+                async loadStopEta(stop) {
+                    if (!stop) return;
+                    this.stopEtaLoading = true;
+                    this.stopEtaError = null;
+                    this.stopEtaRoutes = [];
+                    
+                    try {
+                        const apiUrl = `https://data.etabus.app.gov.hk/v1/transport/kmb/stop-eta/${stop.stop}`;
+                        const etaRes = await fetchWithFallback(apiUrl);
+                        const etaData = await etaRes.json();
+                        
+                        if (!etaData.data || etaData.data.length === 0) {
+                            this.stopEtaLoading = false;
+                            this.stopEtaUpdateTime = new Date().toLocaleTimeString('zh-HK');
+                            return;
+                        }
+
+                        const routeMap = {};
+                        etaData.data.forEach(eta => {
+                            const routeKey = `${eta.route}_${eta.dir}`;
+                            if (!routeMap[routeKey]) {
+                                routeMap[routeKey] = { 
+                                    route: eta.route, 
+                                    dir: eta.dir,
+                                    dest: eta.dest_tc, 
+                                    etas: [] 
+                                };
+                            }
+                            routeMap[routeKey].etas.push(eta);
+                        });
+
+                        const routesArray = Object.values(routeMap).map(r => {
+                            r.etas.sort((a, b) => {
+                                if (!a.eta && !b.eta) return 0;
+                                if (!a.eta) return 1;
+                                if (!b.eta) return -1;
+                                return new Date(a.eta) - new Date(b.eta);
+                            });
+                            r.etas = r.etas.map(eta => {
+                                if (!eta.eta) {
+                                    return { minutes: '--', timeStr: '--', remark: eta.rmk_tc || '' };
+                                }
+                                const time = new Date(eta.eta);
+                                const min = Math.max(0, Math.round((time - new Date()) / 60000));
+                                const timeStr = time.toLocaleTimeString('zh-HK', { hour: '2-digit', minute: '2-digit' });
+                                return { minutes: min, timeStr: timeStr, remark: eta.rmk_tc || '' };
+                            });
+                            return r;
+                        });
+
+                        routesArray.sort((a, b) => a.route.localeCompare(b.route, 'zh-HK', { numeric: true }));
+
+                        this.stopEtaRoutes = routesArray;
+                        this.stopEtaUpdateTime = new Date().toLocaleTimeString('zh-HK');
+                    } catch (e) {
+                        console.error('Stop ETA error:', e);
+                        this.stopEtaError = '無法連接到巴士 API：' + e.message;
+                    } finally {
+                        this.stopEtaLoading = false;
+                    }
+                },
+
+                async fetchWeather() {
+                    try {
+                        const lats = districtsData.map(d => d.lat).join(",");
+                        const lons = districtsData.map(d => d.lon).join(",");
+                        const url = `https://api.open-meteo.com/v1/forecast?latitude=${lats}&longitude=${lons}&hourly=temperature_2m,apparent_temperature,precipitation_probability&timezone=Asia%2FHong_Kong&forecast_days=2`;
+                        const res = await fetch(url);
+                        const dataList = await res.json(); 
+                        const now = new Date();
+                        const nowHourStr = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0') + 'T' + String(now.getHours()).padStart(2, '0') + ':00';
+                        
+                        this.districts.forEach((d, i) => {
+                            if (dataList[i] && dataList[i].hourly) {
+                                const times = dataList[i].hourly.time;
+                                let idx = times.indexOf(nowHourStr);
+                                if (idx === -1) idx = 0;
+                                let cur_temp = dataList[i].hourly.temperature_2m[idx];
+                                let cur_app_temp = dataList[i].hourly.apparent_temperature[idx];
+                                let cur_rain = dataList[i].hourly.precipitation_probability[idx];
+                                
+                                d.temp = cur_temp; d.app_temp = cur_app_temp; d.rain = cur_rain;
+                                d.hourly = [];
+                                let popupRows = '';
+                                let max_diff = -1, max_rain = -1;
+                                
+                                for (let h = 0; h < 24; h++) {
+                                    let t = new Date(dataList[i].hourly.time[idx + h]);
+                                    let dateStr = String(t.getMonth() + 1).padStart(2, '0') + '-' + String(t.getDate()).padStart(2, '0');
+                                    let hourStr = String(t.getHours()).padStart(2, '0') + ':00';
+                                    let fullTimeStr = `${dateStr} ${hourStr}`;
+                                    let tempVal = dataList[i].hourly.temperature_2m[idx + h];
+                                    let appTempVal = dataList[i].hourly.apparent_temperature[idx + h];
+                                    let rainVal = dataList[i].hourly.precipitation_probability[idx + h];
+                                    
+                                    d.hourly.push({ time: fullTimeStr, temp: tempVal, rain: rainVal });
+                                    let rowClass = h === 0 ? 'bg-indigo-100 font-bold' : '';
+                                    let tempColor = tempVal >= 28 ? 'color:red; font-weight:bold;' : '';
+                                    let rainColor = rainVal >= 70 ? 'color:red; font-weight:bold;' : '';
+                                    popupRows += `<tr class="${rowClass}"><td>${fullTimeStr}</td><td style="${tempColor}">${tempVal}°C</td><td style="${rainColor}">${rainVal}%</td></tr>`;
+                                    
+                                    let diff = Math.abs(appTempVal - cur_app_temp);
+                                    if (diff > max_diff) { max_diff = diff; d.max_diff_time = fullTimeStr; d.max_diff_temp = appTempVal; }
+                                    if (rainVal > max_rain) { max_rain = rainVal; d.max_rain_time = fullTimeStr; d.max_rain_val = rainVal; }
+                                }
+                                
+                                if (this.weatherMarkers && this.weatherMarkers[d.name]) {
+                                    let markerColor = d.temp >= 28 ? 'red' : (d.temp >= 20 ? 'orange' : 'blue');
+                                    let radius = 6 + (d.rain / 100) * 10;
+                                    let tempLC = (d.app_temp >= 28) ? 'red' : 'black';
+                                    let rainLC = (d.rain >= 70) ? 'red' : 'blue';
+                                    let maxRainLC = (d.max_rain_val >= 70) ? 'red' : 'blue';
+                                    
+                                    let labelHtml = `<div style="text-align:left;"><b>${d.name}</b><br>現時: 體感<b style="color:${tempLC}">${d.app_temp}°C</b> ${d.temp}°C <span style="color:${rainLC}">${d.rain}%</span><br>溫差: ${d.max_diff_time} (${d.max_diff_temp}°C)<br>降雨: ${d.max_rain_time} (<b style="color:${maxRainLC}">${d.max_rain_val}%</b>)</div>`;
+                                    this.weatherMarkers[d.name].setTooltipContent(labelHtml);
+                                    this.weatherMarkers[d.name].setStyle({ color: markerColor, fillColor: markerColor, radius: radius });
+                                    
+                                    let popupContent = `<div class="bus-popup"><b>${d.name} - 天氣重點</b><br>現時: 體感 ${d.app_temp}°C, 氣溫 ${d.temp}°C, 降雨 ${d.rain}%<br>最大溫差: ${d.max_diff_time} (${d.max_diff_temp}°C)<br>降雨高峰: ${d.max_rain_time} (${d.max_rain_val}%)<br><hr><table style="width:100%;"><tr><td>時間</td><td>溫度</td><td>降雨</td></tr>${popupRows}</table></div>`;
+                                    this.weatherMarkers[d.name].setPopupContent(popupContent);
+                                }
+                            }
+                        });
+                        this.updateTime = now.toLocaleTimeString('zh-HK');
+                    } catch (e) { console.error('Weather error:', e); }
+                },
+
+                initWeatherMap() {
+                    if (this.weatherMapInit) return;
+                    this.weatherMap = L.map('weatherMap').setView([22.3193, 114.1694], 11);
+                    L.tileLayer('https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}', { attribution: '© Google', maxZoom: 20 }).addTo(this.weatherMap);
+                    
+                    this.weatherMarkers = {};
+                    
+                    districtsData.forEach(d => {
+                        this.weatherMarkers[d.name] = L.circleMarker([d.lat, d.lon], { radius: 8, color: 'blue', fillColor: 'blue', fillOpacity: 0.7, weight: 2 }).addTo(this.weatherMap);
+                        this.weatherMarkers[d.name].bindTooltip('載入中...', {permanent: true, direction: 'top', offset: [0, -8], className: 'map-label'});
+                        this.weatherMarkers[d.name].bindPopup('載入中...');
+                        this.weatherMarkers[d.name].on('click', () => {
+                            const idx = this.districts.findIndex(dis => dis.name === d.name);
+                            if(idx !== -1) this.focusDistrict(idx);
+                        });
+                    });
+                    this.weatherMapInit = true;
+                    this.weatherMap.invalidateSize();
+                },
+
+                toggleTraffic() {
+                    if (!this.busMap) return;
+                    if (this.showTraffic) {
+                        this.busMap.removeLayer(this.baseLayer);
+                        this.trafficLayer.addTo(this.busMap);
+                    } else {
+                        this.busMap.removeLayer(this.trafficLayer);
+                        this.baseLayer.addTo(this.busMap);
+                    }
+                },
+
+                async initBusMap() {
+                    if (this.busMapInit) return;
+                    this.busLoading = true;
+                    this.busMap = L.map('busMap').setView([22.3193, 114.1694], 12);
+                    
+                    this.baseLayer = L.tileLayer('https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}', { attribution: '© Google', maxZoom: 20 });
+                    this.trafficLayer = L.tileLayer('https://mt1.google.com/vt/lyrs=m,traffic&x={x}&y={y}&z={z}', { attribution: '© Google', maxZoom: 20 });
+                    
+                    if (this.showTraffic) {
+                        this.trafficLayer.addTo(this.busMap);
+                    } else {
+                        this.baseLayer.addTo(this.busMap);
+                    }
+
+                    const stopsLayer = L.markerClusterGroup({ 
+                        maxClusterRadius: 50,
+                        iconCreateFunction: function(cluster) {
+                            return L.divIcon({ html: '<div style="background-color:#dc2626;color:white;border-radius:50%;width:36px;height:36px;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:bold;border:2px solid white;">' + cluster.getChildCount() + '</div>', className: 'bus-cluster', iconSize: [36, 36] });
+                        }
+                    });
+                    this.busMap.addLayer(stopsLayer);
+
+                    const handleStopClick = (marker, stop) => {
+                        this.selectBusStop(stop);
+                        marker.bindPopup(`<div class="bus-popup"><b>${stop.name_tc}</b><br><div style="color:#6b7280;font-size:11px;">已載入完整到站資訊至右側面板</div></div>`).openPopup();
+                    };
+
+                    let stopsToLoad = realBusStops;
+                    let isTestData = false;
+                    
+                    if (!stopsToLoad || stopsToLoad.length === 0) {
+                        try {
+                            const apiUrl = 'https://data.etabus.app.gov.hk/v1/transport/kmb/stop';
+                            const res = await fetchWithFallback(apiUrl);
+                            if (res.ok) {
+                                const data = await res.json();
+                                stopsToLoad = data.data || [];
+                            }
+                        } catch (e) {
+                            console.error("Browser fetch failed:", e);
+                        }
+                    }
+
+                    if (!stopsToLoad || stopsToLoad.length === 0) {
+                        stopsToLoad = mockStops;
+                        isTestData = true;
+                    }
+
+                    this.allBusStops = stopsToLoad;
+
+                    if (stopsToLoad && stopsToLoad.length > 0) {
+                        stopsToLoad.forEach(stop => {
+                            const lat = parseFloat(stop.lat);
+                            const lon = parseFloat(stop.long);
+                            if (!isNaN(lat) && !isNaN(lon)) {
+                                const marker = L.marker([lat, lon]);
+                                marker.bindPopup(`<div class="bus-popup"><b>${stop.name_tc}</b><br>點擊查看完整實時到站時間</div>`);
+                                marker.on('click', () => handleStopClick(marker, stop));
+                                stopsLayer.addLayer(marker);
+                                this.busMarkersMap[stop.stop] = marker;
+                            }
+                        });
+                    } else {
+                        L.marker([22.296, 114.172]).addTo(this.busMap).bindPopup('無法載入巴士站數據。').openPopup();
+                    }
+                    
+                    this.busLoading = false;
+                    this.busMapInit = true;
+                    this.busMap.invalidateSize();
+                }
+            }
+        }
+
+        document.addEventListener('alpine:init', () => { Alpine.data('appApp', appApp); });
+    </script>
+</body>
+</html>
